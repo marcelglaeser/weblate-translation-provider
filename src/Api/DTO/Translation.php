@@ -25,4 +25,14 @@ class Translation extends DTO
 
     /** @var bool */
     public $created = false;
+
+    public function __construct(array $data)
+    {
+        // Setze die source_language, falls sie in den Daten vorhanden ist
+        $this->source_language = $data['source_language'] ?? 'en'; // Standardwert 'en', wenn nicht vorhanden
+        $this->language_code = $data['language_code'] ?? 'en';
+        $this->filename = $data['filename'] ?? 'translation.xliff';
+        $this->file_url = $data['file_url'] ?? '';
+        $this->created = $data['created'] ?? false;
+    }
 }
