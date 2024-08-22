@@ -155,22 +155,95 @@ class TranslationApi
     /**
      * @throws ExceptionInterface
      */
-    public static function downloadTranslation(Translation $translation): string
+    public static function downloadTranslation(Translation $translation, string $format = 'json'): string
     {
-        /**
-         * GET /api/translations/(string: project)/(string: component)/(string: language)/file/.
-         *
-         * @see https://docs.weblate.org/en/latest/api.html#get--api-translations-(string-project)-(string-component)-(string-language)-file-
-         */
-        $response = self::$client->request('GET', $translation->file_url);
-
-        if (200 !== $response->getStatusCode()) {
-            self::$logger->debug($response->getStatusCode() . ': ' . $response->getContent(false));
-            throw new ProviderException('Unable to download weblate translation.', $response);
+        $url = $translation->file_url;
+        if ($format !== 'json') {
+            $url .= '?format=' . $format;
         }
 
-        self::$logger->debug('Downloaded translation ' . $translation->filename);
+        try {
+            // Führe die API-Anfrage aus
+            $response = self::$client->request('GET', $url);
+            $statusCode = $response->getStatusCode();
+            $content = $response->getContent(false); // Inhalt ohne zu parsen
 
-        return $response->getContent();
+            // Protokolliere den Statuscode und den vollständigen Antwortinhalt
+            self::$logger->debug('Requesting URL: ' . $url);
+            self::$logger->debug('HTTP Status Code: ' . $statusCode);
+            self::$logger->debug('Response Content: ' . $content);
+
+            if ($statusCode !== 200) {
+                throw new ProviderException('Unable to download weblate translation. HTTP Status: ' . $statusCode . ', Content: ' . $content);
+            }
+
+            // Wenn das Format XLIFF ist, gib den Inhalt direkt zurück
+            if ($format === 'xliff' || stripos($content, '<?xml') !== false) {
+                return $content;  // XLIFF-Inhalt direkt zurückgeben
+            }
+
+            // Falls JSON erwartet wird, versuche die Antwort zu parsen
+            if ($format === 'json') {
+                try {
+                    $jsonData = $response->toArray();  // JSON als Array
+                } catch (\Exception $jsonException) {
+                    self::$logger->error('Failed to parse JSON response: ' . $jsonException->getMessage());
+                    self::$logger->error('Raw Content: ' . $content);
+                    throw $jsonException;  // Werfe den Fehler erneut
+                }
+
+                // Hier die Umwandlung von JSON zu XLIFF starten
+                $xliffContent = self::convertJsonToXliff($jsonData, $translation);
+                return $xliffContent;
+            } else {
+                return $content;  // Andere Formate als roher Inhalt
+            }
+        } catch (\Exception $e) {
+            self::$logger->error('Error while requesting URL: ' . $url);
+            self::$logger->error('Exception Message: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+
+    /**
+     * Konvertiert JSON-Daten in das XLIFF-Format
+     */
+    private static function convertJsonToXliff(array $jsonData, Translation $translation): string
+    {
+        // Korrekte XML-Deklaration und XLIFF-Struktur mit dem 'original'-Attribut
+        $xliff = '<?xml version="1.0" encoding="UTF-8"?>';
+        $xliff .= '<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">';
+
+        // Füge das 'original'-Attribut hinzu, hier dynamisch basierend auf dem Dateinamen
+        $original = htmlspecialchars($translation->filename ?? 'unknown_file');
+
+        $xliff .= '<file source-language="' . htmlspecialchars($translation->source_language) . '" target-language="' . htmlspecialchars($translation->language_code) . '" datatype="plaintext" original="' . $original . '">';
+        $xliff .= '<body>';
+
+        foreach ($jsonData as $key => $value) {
+            // Überprüfe, ob $key und $value Strings sind, bevor htmlspecialchars() aufgerufen wird
+            if (is_string($key) && is_string($value)) {
+                $xliff .= '<trans-unit id="' . htmlspecialchars($key) . '">';
+                $xliff .= '<source>' . htmlspecialchars($key) . '</source>';
+                $xliff .= '<target>' . htmlspecialchars($value) . '</target>';
+                $xliff .= '</trans-unit>';
+            } elseif (is_array($value)) {
+                // Falls $value ein Array ist, durchlaufe es und füge jedes Element hinzu
+                foreach ($value as $subKey => $subValue) {
+                    if (is_string($subKey) && is_string($subValue)) {
+                        $xliff .= '<trans-unit id="' . htmlspecialchars($subKey) . '">';
+                        $xliff .= '<source>' . htmlspecialchars($subKey) . '</source>';
+                        $xliff .= '<target>' . htmlspecialchars($subValue) . '</target>';
+                        $xliff .= '</trans-unit>';
+                    }
+                }
+            }
+        }
+
+        $xliff .= '</body>';
+        $xliff .= '</file>';
+        $xliff .= '</xliff>';
+
+        return $xliff;
     }
 }
